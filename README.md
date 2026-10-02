@@ -100,6 +100,20 @@ event = JSONServerSentEvent(
 )
 ```
 
+### EventStreamParser
+
+For filtering or forwarding an upstream `text/event-stream` byte stream, feed
+arbitrary bytes chunks to an incremental parser:
+
+```python
+from sse_starlette import EventStreamParser
+
+parser = EventStreamParser(max_line_bytes=8192, max_event_bytes=65536)
+for chunk in upstream_chunks:
+    for event in parser.feed(chunk):
+        ...
+```
+
 ## Advanced Usage
 
 ### Custom Ping Configuration
