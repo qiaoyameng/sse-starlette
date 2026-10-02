@@ -100,6 +100,46 @@ event = JSONServerSentEvent(
 )
 ```
 
+### Reconnecting With `Last-Event-ID`
+
+`BoundedEventStore` keeps a small in-process history and assigns dense, ordered
+event IDs. The window is bounded by both the number of events and their encoded
+UTF-8 SSE size. Use `ResumableEventSourceResponse` to validate the browser's
+`Last-Event-ID` header before starting the response:
+
+```python
+from starlette.requests import Request
+from sse_starlette import BoundedEventStore, ResumableEventSourceResponse
+
+# One shared store per process; it is not shared between workers.
+event_store = BoundedEventStore(max_events=1000, max_bytes=1_000_000)
+
+async def publish_update(data):
+    await event_store.publish({"event": "update", "data": data})
+
+async def events_endpoint(request: Request):
+    return ResumableEventSourceResponse.from_request(
+        event_store,
+        request,
+        ping=15,
+    )
+```
+
+The returned stream first replays retained events after the supplied cursor and
+then moves to live events without a gap or a duplicate at the handoff. Cursor
+outcomes are explicit:
+
+- missing or empty cursor: replay the retained window
+- retained older cursor: replay newer events
+- latest cursor: open the stream with no historical body
+- evicted cursor: `409 Conflict` before any `200 OK` is started
+- syntactically unknown or future cursor: `400 Bad Request`
+
+Pure comment events (`ServerSentEvent(comment="ping")`) can still be sent to
+connected subscribers, but they are not retained and do not advance the event
+ID. Eviction similarly removes old bytes/events without changing the latest
+business cursor.
+
 ## Advanced Usage
 
 ### Custom Ping Configuration
