@@ -100,6 +100,46 @@ event = JSONServerSentEvent(
 )
 ```
 
+### In-Process Broadcasting
+
+Use `EventBroadcaster` to fan one in-process source or publisher out to many SSE
+pages. Every subscription has its own bounded backlog, so a slow page can never
+block delivery to healthy subscribers.
+
+```python
+from sse_starlette import EventBroadcaster, EventSourceResponse
+
+broadcaster = EventBroadcaster()
+
+async def publish_update(payload):
+    await broadcaster.publish({"data": payload, "event": "update"})
+
+async def events_endpoint(request):
+    subscription = broadcaster.subscribe(backlog=100)
+    return EventSourceResponse(subscription)
+```
+
+When a subscriber reaches its backlog, it receives a terminal
+`subscription_lagged` SSE event containing `last_sequence`,
+`first_missing_sequence`, `latest_sequence`, and `backlog`. The response then
+closes rather than silently omitting events and presenting a continuous stream.
+
+For a shared async source, explicitly choose what happens when the final
+subscriber leaves:
+
+```python
+from sse_starlette import LastSubscriberPolicy
+
+broadcaster = EventBroadcaster.from_async_iterable(
+    shared_events(),
+    on_last_subscriber=LastSubscriberPolicy.KEEP_SOURCE,
+)
+```
+
+`STOP_SOURCE` closes the source and stops its pump after the final subscriber
+leaves. `KEEP_SOURCE` retains source ownership with the caller, allowing later
+subscribers to attach; close the source/broadcaster explicitly during shutdown.
+
 ## Advanced Usage
 
 ### Custom Ping Configuration
@@ -449,4 +489,3 @@ contributor footprint small. See `tests/experimentation/` for the tests it enabl
 [build-url]: https://github.com/sysid/sse-starlette/actions/workflows/build.yml
 [coverage-image]: https://codecov.io/gh/sysid/sse-starlette/branch/master/graph/badge.svg
 <!--[coverage-url]: https://codecov.io/gh/sysid/sse-starlette-->
-

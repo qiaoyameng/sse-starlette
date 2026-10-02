@@ -362,27 +362,41 @@ class EventSourceResponse(Response):
 
     async def _stream_response(self, send: Send) -> None:
         """Send out SSE data to the client as it becomes available in the iterator."""
-        await send(
-            {
-                "type": "http.response.start",
-                "status": self.status_code,
-                "headers": self.raw_headers,
-            }
-        )
+        try:
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": self.status_code,
+                    "headers": self.raw_headers,
+                }
+            )
 
-        async for data in self.body_iterator:
-            chunk = ensure_bytes(data, self.sep)
-            logger.debug("chunk: %s", chunk)
-            try:
-                await self._send_with_timeout(
-                    send,
-                    {"type": "http.response.body", "body": chunk, "more_body": True},
-                )
-            except SendTimeoutError:
-                aclose = getattr(self.body_iterator, "aclose", None)
-                if aclose is not None:
-                    await aclose()
-                raise
+            async for data in self.body_iterator:
+                chunk = ensure_bytes(data, self.sep)
+                logger.debug("chunk: %s", chunk)
+                try:
+                    await self._send_with_timeout(
+                        send,
+                        {
+                            "type": "http.response.body",
+                            "body": chunk,
+                            "more_body": True,
+                        },
+                    )
+                except SendTimeoutError:
+                    aclose = getattr(self.body_iterator, "aclose", None)
+                    if aclose is not None:
+                        await aclose()
+                    raise
+        except BaseException as stream_error:
+            aclose = getattr(self.body_iterator, "aclose", None)
+            if (
+                getattr(self.body_iterator, "_sse_close_on_stream_error", False)
+                and not isinstance(stream_error, StopAsyncIteration)
+                and aclose is not None
+            ):
+                await aclose()
+            raise
 
         async with self._send_lock:
             self.active = False
