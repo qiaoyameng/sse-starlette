@@ -100,6 +100,29 @@ event = JSONServerSentEvent(
 )
 ```
 
+### SSEParser
+
+For the reverse direction — e.g. a gateway that filters and forwards an
+upstream SSE stream — `SSEParser` incrementally decodes arbitrary `bytes`
+chunks back into `ServerSentEvent` objects. Split UTF-8 characters, split
+CRLF sequences and a leading BOM are handled; multi-line `data:` is
+accumulated per the SSE spec; comments and invalid `retry` values are
+ignored; events not terminated by a blank line at end of input are
+discarded, never dispatched. Line and event sizes can be capped via
+`max_line_length` / `max_event_size` (violations raise `SSEParseError`
+with byte offset, line number and a parser state snapshot).
+
+```python
+from sse_starlette import SSEParser
+
+parser = SSEParser()
+async for chunk in upstream_response.aiter_bytes():
+    for event in parser.feed(chunk):
+        yield event  # filter / forward as needed
+for event in parser.close():  # flush end of input
+    yield event
+```
+
 ## Advanced Usage
 
 ### Custom Ping Configuration
@@ -449,4 +472,3 @@ contributor footprint small. See `tests/experimentation/` for the tests it enabl
 [build-url]: https://github.com/sysid/sse-starlette/actions/workflows/build.yml
 [coverage-image]: https://codecov.io/gh/sysid/sse-starlette/branch/master/graph/badge.svg
 <!--[coverage-url]: https://codecov.io/gh/sysid/sse-starlette-->
-
