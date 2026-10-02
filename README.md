@@ -100,6 +100,38 @@ event = JSONServerSentEvent(
 )
 ```
 
+### EventBroadcaster
+
+For fan-out of one background event stream to many SSE connections (e.g. several
+pages subscribed to the same task), without a slow page blocking the others:
+
+```python
+from sse_starlette import EventBroadcaster, EventSourceResponse, LaggedError
+
+# when_empty is a required, explicit ownership choice for the event source:
+# "close" stops the source (via on_close) once the last subscriber leaves,
+# "keep_open" leaves the source running for late subscribers.
+broadcaster = EventBroadcaster(when_empty="close", on_close=producer_task.cancel)
+
+@app.get("/events")
+async def events(request):
+    subscription = broadcaster.subscribe(max_backlog=100)
+    return EventSourceResponse(subscription)
+
+# anywhere in the same event loop, e.g. your background task:
+broadcaster.publish({"data": "tick"})
+```
+
+- **Isolation**: `publish()` never blocks; each subscription has its own bounded
+  buffer, so a slow connection only fills its own backlog.
+- **Visible lag**: a subscription that exceeds its `max_backlog` ends by raising
+  `LaggedError`, which reports `first_missed_seq`, `missed_count` and
+  `last_delivered_seq` — events are never silently dropped mid-stream.
+- **Consistent order**: every event gets a sequence number and reaches all
+  healthy subscribers in the same order.
+- **Isolated teardown**: client disconnect, send failure and `unsubscribe()`
+  release only that one subscription.
+
 ## Advanced Usage
 
 ### Custom Ping Configuration
@@ -449,4 +481,3 @@ contributor footprint small. See `tests/experimentation/` for the tests it enabl
 [build-url]: https://github.com/sysid/sse-starlette/actions/workflows/build.yml
 [coverage-image]: https://codecov.io/gh/sysid/sse-starlette/branch/master/graph/badge.svg
 <!--[coverage-url]: https://codecov.io/gh/sysid/sse-starlette-->
-
