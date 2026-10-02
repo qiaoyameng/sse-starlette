@@ -100,6 +100,43 @@ event = JSONServerSentEvent(
 )
 ```
 
+### StreamingServerSentEvent
+
+For very long event payloads, `data` can be an async source of text chunks.
+The event is encoded incrementally as chunks are read — the payload is never
+joined into one string first, and downstream backpressure limits how fast the
+source is consumed:
+
+```python
+from sse_starlette import StreamingServerSentEvent
+
+async def read_log_chunks():
+    async with aiosqlite.connect("app.db") as db:
+        async with db.execute("SELECT line FROM logs") as cursor:
+            async for (line,) in cursor:
+                yield line
+
+event = StreamingServerSentEvent(
+    data=read_log_chunks(),  # async iterable of str
+    event="log-dump",
+    id="msg-123",
+)
+```
+
+Semantics:
+
+- CR, LF and CRLF are handled across chunk boundaries; every logical line is
+  sent as its own `data:` line and the event ends with a single blank line,
+  byte-identical to `ServerSentEvent` for the same text.
+- The head lines (`comment`/`id`/`event`) are sent first; the terminating
+  blank line (the commit boundary that makes clients dispatch the event) is
+  only sent after the source completes successfully. If the source fails,
+  the partial event is left unterminated instead of being disguised as a
+  complete event.
+- Heartbeats and other events never interleave inside a streaming event.
+- The event takes ownership of the source and closes it (via `aclose()` when
+  available) when encoding finishes, fails, or the client disconnects.
+
 ## Advanced Usage
 
 ### Custom Ping Configuration

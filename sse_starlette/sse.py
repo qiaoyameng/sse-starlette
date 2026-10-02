@@ -53,7 +53,11 @@ from starlette.responses import Response
 from starlette.types import Receive, Scope, Send, Message
 
 from sse_starlette._utils import collapse_excgroups
-from sse_starlette.event import ServerSentEvent, ensure_bytes
+from sse_starlette.event import (
+    ServerSentEvent,
+    StreamingServerSentEvent,
+    ensure_bytes,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -371,6 +375,9 @@ class EventSourceResponse(Response):
         )
 
         async for data in self.body_iterator:
+            if isinstance(data, StreamingServerSentEvent):
+                await self._stream_event_chunks(data, send)
+                continue
             chunk = ensure_bytes(data, self.sep)
             logger.debug("chunk: %s", chunk)
             try:
@@ -387,6 +394,33 @@ class EventSourceResponse(Response):
         async with self._send_lock:
             self.active = False
             await send({"type": "http.response.body", "body": b"", "more_body": False})
+
+    async def _stream_event_chunks(
+        self, event: StreamingServerSentEvent, send: Send
+    ) -> None:
+        """Send one StreamingServerSentEvent incrementally.
+
+        Holds ``_send_lock`` for the whole event so heartbeats and other
+        events cannot interleave inside it, and applies the per-send timeout
+        to every encoded chunk. The encode stream is always closed, which in
+        turn closes the event-owned source on client disconnect or send
+        failure.
+        """
+        stream = event.astream_encode()
+        try:
+            async with self._send_lock:
+                async for chunk in stream:
+                    logger.debug("chunk: %s", chunk)
+                    await self._send_with_timeout(
+                        send,
+                        {
+                            "type": "http.response.body",
+                            "body": chunk,
+                            "more_body": True,
+                        },
+                    )
+        finally:
+            await stream.aclose()
 
     async def _listen_for_disconnect(self, receive: Receive) -> None:
         """Watch for a disconnect message from the client.
