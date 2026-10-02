@@ -53,7 +53,11 @@ from starlette.responses import Response
 from starlette.types import Receive, Scope, Send, Message
 
 from sse_starlette._utils import collapse_excgroups
-from sse_starlette.event import ServerSentEvent, ensure_bytes
+from sse_starlette.event import (
+    ServerSentEvent,
+    StreamingServerSentEvent,
+    ensure_bytes,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -371,9 +375,12 @@ class EventSourceResponse(Response):
         )
 
         async for data in self.body_iterator:
-            chunk = ensure_bytes(data, self.sep)
-            logger.debug("chunk: %s", chunk)
             try:
+                if isinstance(data, StreamingServerSentEvent):
+                    await self._send_streaming_event(data, send)
+                    continue
+                chunk = ensure_bytes(data, self.sep)
+                logger.debug("chunk: %s", chunk)
                 await self._send_with_timeout(
                     send,
                     {"type": "http.response.body", "body": chunk, "more_body": True},
@@ -387,6 +394,36 @@ class EventSourceResponse(Response):
         async with self._send_lock:
             self.active = False
             await send({"type": "http.response.body", "body": b"", "more_body": False})
+
+    async def _send_streaming_event(
+        self, event: StreamingServerSentEvent, send: Send
+    ) -> None:
+        """Send one StreamingServerSentEvent incrementally.
+
+        The send lock is held for the whole event so that heartbeats (and any
+        other sender) cannot interleave bytes into the middle of a partially
+        sent event. Backpressure is preserved end to end: the next source
+        chunk is only requested after the current encoded chunk has been
+        sent, so a slow client slows down reading instead of buffering.
+        """
+        stream = event.encode_stream()
+        try:
+            async with self._send_lock:
+                async for chunk in stream:
+                    logger.debug("chunk: %s", chunk)
+                    await self._send_with_timeout(
+                        send,
+                        {
+                            "type": "http.response.body",
+                            "body": chunk,
+                            "more_body": True,
+                        },
+                    )
+        finally:
+            # Shielded so the source owned by the event is closed even when
+            # we get here via cancellation (e.g. client disconnect).
+            with anyio.CancelScope(shield=True):
+                await stream.aclose()
 
     async def _listen_for_disconnect(self, receive: Receive) -> None:
         """Watch for a disconnect message from the client.

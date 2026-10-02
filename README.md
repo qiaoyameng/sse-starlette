@@ -100,6 +100,31 @@ event = JSONServerSentEvent(
 )
 ```
 
+### StreamingServerSentEvent
+
+For very long events whose data should not be joined into one string first,
+`StreamingServerSentEvent` accepts an async iterable of text chunks and
+encodes them incrementally as they are read:
+
+```python
+from sse_starlette import StreamingServerSentEvent
+
+async def read_log_chunks():
+    async with aiofiles.open("huge.log") as f:
+        async for chunk in f:
+            yield chunk
+
+event = StreamingServerSentEvent(read_log_chunks(), event="log", id="log-1")
+```
+
+CR, LF and CRLF line endings are recognized across chunk boundaries and each
+logical line is emitted as its own `data:` line, byte-identical to encoding
+the joined text with `ServerSentEvent`. The terminating blank line (which
+commits the event, including its `id`, on the client) is only sent after the
+source completes successfully, so a failing source never turns a half event
+into a complete one. Reading is driven by downstream backpressure, and the
+source is closed when the response ends or the client disconnects.
+
 ## Advanced Usage
 
 ### Custom Ping Configuration
@@ -449,4 +474,3 @@ contributor footprint small. See `tests/experimentation/` for the tests it enabl
 [build-url]: https://github.com/sysid/sse-starlette/actions/workflows/build.yml
 [coverage-image]: https://codecov.io/gh/sysid/sse-starlette/branch/master/graph/badge.svg
 <!--[coverage-url]: https://codecov.io/gh/sysid/sse-starlette-->
-
